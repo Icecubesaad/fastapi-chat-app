@@ -152,19 +152,35 @@ async def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
     messages = history + [{"role": "user", "content": payload.message}]
     body = {"model": payload.model or "openai/gpt-4o-mini", "messages": messages}
 
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-            json=body,
-            timeout=60.0,
-        )
-        r.raise_for_status()
-        data = r.json()
-
-    assistant_text = data["choices"][0]["message"]["content"]
-    crud.create_message(db, conversation_id, schemas.MessageCreate(role="assistant", content=assistant_text))
-    return {"conversation_id": conversation_id, "response": assistant_text}
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}", 
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://opsynth.ai",
+                    "X-Title": "OpSynth Chat"
+                },
+                json=body,
+                timeout=60.0,
+            )
+            if r.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"OpenRouter Error {r.status_code}: {r.text}")
+            r.raise_for_status()
+            data = r.json()
+            
+        if "error" in data:
+            assistant_text = f"API Error: {data['error'].get('message', str(data['error']))}"
+        else:
+            assistant_text = data["choices"][0]["message"]["content"]
+            
+        crud.create_message(db, conversation_id, schemas.MessageCreate(role="assistant", content=assistant_text))
+        return {"conversation_id": conversation_id, "response": assistant_text}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=500, detail=f"HTTP Error: {str(e)} - {e.response.text}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
