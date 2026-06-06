@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastAPI AI Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        dark: {
+                            900: '#0f1117',
+                            800: '#161b22',
+                            700: '#21262d',
+                        },
+                        primary: {
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                        }
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.3s ease-out forwards',
+                        'slide-up': 'slideUp 0.4s ease-out forwards',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        },
+                        slideUp: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0f1117;
+            color: #e5e7eb;
+        }
+        
+        .glass-panel {
+            background: rgba(22, 27, 34, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .message-user {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message-ai {
+            background: rgba(33, 38, 45, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom-left-radius: 4px;
+        }
+        
+        .typing-indicator span {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background-color: #9ca3af;
+            border-radius: 50%;
+            margin: 0 2px;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .nav-item {
+            transition: all 0.2s ease;
+        }
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .nav-item.active {
+            background: rgba(59, 130, 246, 0.15);
+            border-left: 3px solid #3b82f6;
+        }
+    </style>
+</head>
+<body class="h-screen w-full flex overflow-hidden font-sans selection:bg-primary-500 selection:text-white">
+
+    <!-- Sidebar -->
+    <div class="w-64 md:w-80 h-full flex flex-col border-r border-white/5 glass-panel z-10 transition-transform duration-300" id="sidebar">
+        <div class="p-4 border-b border-white/5 flex justify-between items-center">
+            <h1 class="text-lg font-semibold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center gap-2">
+                <i class="fa-solid fa-sparkles text-blue-400"></i> OpSynth AI
+            </h1>
+            <button onclick="newChat()" class="p-2 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors" title="New Chat">
+                <i class="fa-solid fa-pen-to-square"></i>
+            </button>
+        </div>
+        
+        <div class="flex-1 overflow-y-auto p-2 space-y-1" id="chat-history">
+            <!-- Chat history loaded here -->
+            <div class="flex items-center justify-center h-20 text-gray-500 text-sm">
+                <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading history...
+            </div>
+        </div>
+        
+        <div class="p-4 border-t border-white/5 text-xs text-gray-500 flex items-center justify-between">
+            <span>Powered by FastAPI</span>
+            <div class="flex items-center gap-1.5">
+                <div class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
+                Online
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Chat Area -->
+    <div class="flex-1 flex flex-col h-full relative bg-dark-900">
+        
+        <!-- Mobile Header -->
+        <div class="md:hidden p-4 border-b border-white/5 flex items-center glass-panel sticky top-0 z-20">
+            <button onclick="toggleSidebar()" class="text-gray-400 hover:text-white mr-3">
+                <i class="fa-solid fa-bars text-xl"></i>
+            </button>
+            <h1 class="text-base font-medium truncate flex-1" id="mobile-title">New Chat</h1>
+        </div>
+
+        <!-- Chat Messages -->
+        <div class="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth" id="messages-container">
+            <!-- Messages go here -->
+            <div class="flex flex-col items-center justify-center h-full text-center animate-fade-in opacity-50" id="empty-state">
+                <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 flex items-center justify-center mb-4 border border-white/5 shadow-lg">
+                    <i class="fa-solid fa-robot text-3xl text-blue-400"></i>
+                </div>
+                <h2 class="text-xl font-medium mb-2 text-white">How can I help you today?</h2>
+                <p class="text-gray-400 text-sm max-w-md">Start a new conversation by typing a message below. OpSynth AI is ready to assist.</p>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-8 w-full max-w-2xl">
+                    <button onclick="setInput('Write a simple FastAPI endpoint')" class="text-left p-4 rounded-xl border border-white/5 hover:bg-white/5 transition-colors text-sm text-gray-300">
+                        <i class="fa-solid fa-code text-blue-400 mr-2"></i> Write a simple FastAPI endpoint
+                    </button>
+                    <button onclick="setInput('Explain how quantum computing works')" class="text-left p-4 rounded-xl border border-white/5 hover:bg-white/5 transition-colors text-sm text-gray-300">
+                        <i class="fa-solid fa-atom text-purple-400 mr-2"></i> Explain how quantum computing works
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="p-4 md:p-6 bg-gradient-to-t from-dark-900 via-dark-900 to-transparent">
+            <div class="max-w-4xl mx-auto relative group">
+                <div class="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-purple-500 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-500"></div>
+                <form id="chat-form" class="relative flex items-end gap-2 bg-dark-800 border border-white/10 rounded-2xl p-2 shadow-2xl focus-within:border-blue-500/50 transition-colors">
+                    <textarea 
+                        id="message-input"
+                        rows="1"
+                        placeholder="Message OpSynth AI..." 
+                        class="w-full bg-transparent text-white placeholder-gray-500 p-3 outline-none resize-none max-h-32 overflow-y-auto text-sm md:text-base leading-relaxed"
+                        oninput="this.style.height = ''; this.style.height = this.scrollHeight + 'px'"
+                        onkeydown="handleEnter(event)"
+                    ></textarea>
+                    
+                    <button type="submit" id="send-btn" class="p-3 text-white bg-blue-600 hover:bg-blue-500 rounded-xl transition-all shadow-lg hover:shadow-blue-500/25 flex-shrink-0 mb-1 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i class="fa-solid fa-paper-plane text-sm"></i>
+                    </button>
+                </form>
+                <div class="text-center mt-2 text-[10px] text-gray-500">
+                    AI can make mistakes. Consider verifying important information.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = ""; // Relative to the same FastAPI host
+        let currentConversationId = null;
+        let isGenerating = false;
+
+        // Elements
+        const historyEl = document.getElementById('chat-history');
+        const messagesEl = document.getElementById('messages-container');
+        const formEl = document.getElementById('chat-form');
+        const inputEl = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const emptyState = document.getElementById('empty-state');
+        const mobileTitle = document.getElementById('mobile-title');
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadHistory();
+            inputEl.focus();
+        });
+
+        // Set input from suggestion
+        function setInput(text) {
+            inputEl.value = text;
+            inputEl.focus();
+            inputEl.style.height = ''; 
+            inputEl.style.height = inputEl.scrollHeight + 'px';
+        }
+
+        // Handle Enter to submit (Shift+Enter for new line)
+        function handleEnter(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (inputEl.value.trim() && !isGenerating) {
+                    formEl.dispatchEvent(new Event('submit'));
+                }
+            }
+        }
+
+        // Toggle mobile sidebar
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar.style.transform === 'translateX(0px)') {
+                sidebar.style.transform = 'translateX(-100%)';
+            } else {
+                sidebar.style.transform = 'translateX(0px)';
+            }
+        }
+
+        // Start new chat
+        function newChat() {
+            if (isGenerating) return;
+            currentConversationId = null;
+            messagesEl.innerHTML = '';
+            messagesEl.appendChild(emptyState);
+            emptyState.style.display = 'flex';
+            mobileTitle.innerText = 'New Chat';
+            loadHistory();
+            inputEl.focus();
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            if (window.innerWidth < 768) toggleSidebar();
+        }
+
+        // Load chat history sidebar
+        async function loadHistory() {
+            try {
+                const res = await fetch(`${API_BASE}/conversations`);
+                if (!res.ok) throw new Error("Failed to load");
+                const convos = await res.json();
+                
+                if (convos.length === 0) {
+                    historyEl.innerHTML = '<div class="text-xs text-gray-500 text-center py-4">No recent chats</div>';
+                    return;
+                }
+
+                historyEl.innerHTML = convos.sort((a,b) => b.id - a.id).map(c => `
+                    <button onclick="loadChat(${c.id}, '${c.title.replace(/'/g, "\\'")}')" class="nav-item w-full text-left px-3 py-3 rounded-lg flex items-center gap-3 group ${currentConversationId === c.id ? 'active' : ''}">
+                        <i class="fa-regular fa-message text-gray-400 group-hover:text-blue-400 transition-colors"></i>
+                        <span class="text-sm text-gray-300 truncate flex-1">${c.title || 'New Conversation'}</span>
+                    </button>
+                `).join('');
+            } catch (err) {
+                historyEl.innerHTML = '<div class="text-xs text-red-400 text-center py-4">Failed to load history</div>';
+                console.error(err);
+            }
+        }
+
+        // Load specific chat messages
+        async function loadChat(id, title) {
+            if (isGenerating) return;
+            currentConversationId = id;
+            emptyState.style.display = 'none';
+            mobileTitle.innerText = title || 'Chat';
+            if (window.innerWidth < 768) toggleSidebar();
+            
+            messagesEl.innerHTML = '<div class="flex justify-center p-8"><i class="fa-solid fa-circle-notch fa-spin text-blue-500 text-2xl"></i></div>';
+            
+            try {
+                const res = await fetch(`${API_BASE}/conversations/${id}`);
+                if (!res.ok) throw new Error("Failed to load");
+                const data = await res.json();
+                
+                messagesEl.innerHTML = '';
+                data.messages.forEach(m => appendMessage(m.role, m.content, false));
+                scrollToBottom();
+                loadHistory(); // Refresh active state
+            } catch (err) {
+                messagesEl.innerHTML = `<div class="text-red-400 text-center">Failed to load messages: ${err.message}</div>`;
+            }
+        }
+
+        function formatMessageContent(text) {
+            // Basic formatting for code blocks and line breaks
+            let formatted = text.replace(/```([\s\S]*?)```/g, '<pre class="bg-dark-900 p-4 rounded-xl my-3 overflow-x-auto text-xs text-gray-300 border border-white/5 shadow-inner"><code>$1</code></pre>');
+            formatted = formatted.replace(/\n/g, '<br>');
+            return formatted;
+        }
+
+        function appendMessage(role, content, animate = true) {
+            const div = document.createElement('div');
+            const isUser = role === 'user';
+            
+            div.className = `flex gap-4 max-w-4xl mx-auto mb-6 w-full ${animate ? 'animate-slide-up' : ''}`;
+            
+            let iconHtml = isUser 
+                ? `<div class="w-8 h-8 rounded-full bg-gradient-to-br from-gray-600 to-gray-800 flex items-center justify-center flex-shrink-0 shadow-lg border border-white/10"><i class="fa-solid fa-user text-xs text-white"></i></div>`
+                : `<div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-[0_0_15px_rgba(59,130,246,0.3)]"><i class="fa-solid fa-sparkles text-xs text-white"></i></div>`;
+
+            let bubbleClass = isUser ? 'message-user' : 'message-ai';
+            
+            div.innerHTML = `
+                ${isUser ? '<div class="flex-1"></div>' : iconHtml}
+                <div class="px-5 py-3.5 rounded-2xl text-sm leading-relaxed ${bubbleClass} max-w-[85%] text-gray-100 shadow-md">
+                    ${formatMessageContent(content)}
+                </div>
+                ${isUser ? iconHtml : ''}
+            `;
+            
+            messagesEl.appendChild(div);
+            scrollToBottom();
+        }
+
+        function appendTypingIndicator() {
+            const div = document.createElement('div');
+            div.id = 'typing-indicator';
+            div.className = `flex gap-4 max-w-4xl mx-auto mb-6 w-full animate-fade-in`;
+            div.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-[0_0_15px_rgba(59,130,246,0.3)]">
+                    <i class="fa-solid fa-sparkles text-xs text-white"></i>
+                </div>
+                <div class="px-5 py-4 rounded-2xl message-ai border border-white/5 max-w-[85%] flex items-center">
+                    <div class="typing-indicator flex items-center h-4">
+                        <span></span><span></span><span></span>
+                    </div>
+                </div>
+            `;
+            messagesEl.appendChild(div);
+            scrollToBottom();
+            return div;
+        }
+
+        function scrollToBottom() {
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Handle form submission
+        formEl.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (isGenerating) return;
+            
+            const text = inputEl.value.trim();
+            if (!text) return;
+            
+            emptyState.style.display = 'none';
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            inputEl.focus();
+            
+            appendMessage('user', text);
+            isGenerating = true;
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-sm"></i>';
+            
+            const indicator = appendTypingIndicator();
+            
+            try {
+                const res = await fetch(`${API_BASE}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: text,
+                        conversation_id: currentConversationId,
+                        model: "openai/gpt-4o-mini"
+                    })
+                });
+                
+                indicator.remove();
+                
+                if (!res.ok) {
+                    const err = await res.text();
+                    appendMessage('assistant', `⚠️ **Error:** ${err || res.statusText}`);
+                } else {
+                    const data = await res.json();
+                    currentConversationId = data.conversation_id;
+                    appendMessage('assistant', data.response);
+                    loadHistory(); // Update sidebar with new chat if this was the first message
+                }
+            } catch (err) {
+                indicator.remove();
+                appendMessage('assistant', `⚠️ **Connection Error:** ${err.message}`);
+            } finally {
+                isGenerating = false;
+                sendBtn.disabled = false;
+                sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane text-sm"></i>';
+            }
+        });
+    </script>
+</body>
+</html>
