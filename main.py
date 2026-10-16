@@ -1,10 +1,13 @@
+import logging
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -14,8 +17,11 @@ import models
 import schemas
 import crud
 from database import engine, get_db
+from logging_config import request_id_var, setup_logging
 
 load_dotenv()
+setup_logging()
+logger = logging.getLogger("chatbot")
 
 OPENROUTER_API_KEY = "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"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -27,7 +33,9 @@ CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", FRONTEND_
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     models.Base.metadata.create_all(bind=engine)
+    logger.info("startup complete", extra={"database": engine.url.get_backend_name(), "log_level": os.getenv("LOG_LEVEL", "INFO")})
     yield
+    logger.info("shutdown")
 
 app = FastAPI(title="Chatbot API", lifespan=lifespan)
 
@@ -41,6 +49,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+QUIET_PATHS = {"/health", "/health/db"}
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """One line per request with method, path, status and duration; an unhandled error is logged with its traceback."""
+    rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    token = request_id_var.set(rid)
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers["X-Request-ID"] = rid
+        return response
+    except Exception:
+        logger.exception("unhandled error", extra={"method": request.method, "path": request.url.path})
+        return JSONResponse({"detail": "Internal Server Error", "request_id": rid}, status_code=500, headers={"X-Request-ID": rid})
+    finally:
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
+        level = logging.DEBUG if request.url.path in QUIET_PATHS and status < 400 else (logging.ERROR if status >= 500 else logging.WARNING if status >= 400 else logging.INFO)
+        logger.log(
+            level,
+            "http_request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": status,
+                "duration_ms": duration_ms,
+                "client": request.client.host if request.client else None,
+            },
+        )
+        request_id_var.reset(token)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -57,6 +100,7 @@ def health_db(db: Session = Depends(get_db)):
         db.execute(text("SELECT 1"))
         return {"database": "ok"}
     except Exception as e:
+        logger.error("database health check failed", extra={"error": str(e)})
         return {"database": "error", "details": str(e)}
 
 
@@ -84,6 +128,7 @@ async def test_ai():
             ai_response = data["choices"][0]["message"]["content"].strip().lower()
             return {"ai": ai_response}
     except Exception as e:
+        logger.error("test-ai upstream call failed", extra={"error": str(e), "upstream": "openrouter"})
         return {"ai": "error", "details": str(e)}
 
 
@@ -148,11 +193,13 @@ async def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
         history = []
 
     crud.create_message(db, conversation_id, schemas.MessageCreate(role="user", content=payload.message))
+    logger.info("chat request", extra={"conversation_id": conversation_id, "history_messages": len(history), "model": payload.model or "openai/gpt-4o-mini"})
 
     messages = history + [{"role": "user", "content": payload.message}]
     body = {"model": payload.model or "openai/gpt-4o-mini", "messages": messages}
 
     try:
+        upstream_started = time.perf_counter()
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 OPENROUTER_URL,
@@ -165,7 +212,12 @@ async def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
                 json=body,
                 timeout=60.0,
             )
+            logger.info(
+                "upstream response",
+                extra={"upstream": "openrouter", "status": r.status_code, "duration_ms": round((time.perf_counter() - upstream_started) * 1000, 1), "conversation_id": conversation_id},
+            )
             if r.status_code != 200:
+                logger.error("upstream rejected the request", extra={"upstream": "openrouter", "status": r.status_code, "body": r.text[:300], "conversation_id": conversation_id})
                 raise HTTPException(status_code=500, detail=f"OpenRouter Error {r.status_code}: {r.text}")
             r.raise_for_status()
             data = r.json()
@@ -178,17 +230,15 @@ async def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
         crud.create_message(db, conversation_id, schemas.MessageCreate(role="assistant", content=assistant_text))
         return {"conversation_id": conversation_id, "response": assistant_text}
     except httpx.HTTPStatusError as e:
+        logger.error("upstream http error", extra={"upstream": "openrouter", "status": e.response.status_code, "conversation_id": conversation_id})
         raise HTTPException(status_code=500, detail=f"HTTP Error: {str(e)} - {e.response.text}")
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.exception("chat failed", extra={"conversation_id": conversation_id})
         raise HTTPException(status_code=500, detail=f"Internal Error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
-
-# fovra QA: commit to test webhook-triggered redeploy and the CI pipeline.
-
-# fovra QA: second commit, webhook redeploy after the fixes.
-
-# fovra QA: third commit, webhook build with the port fix.
