@@ -89,6 +89,11 @@ async def log_requests(request: Request, call_next):
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "BACKEND_URL": BACKEND_URL})
 
+@app.get("/version")
+def version():
+    return {"version": "v2", "note": "QA release 2"}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
